@@ -18,7 +18,7 @@ import {
   type ApiChatQueryResponse,
   type ApiChatSource,
 } from "@/lib/api/chat";
-import { streamChat, type ChatStreamEvent } from "@/lib/api/chatStream";
+import { streamChat } from "@/lib/api/chatStream";
 import { ApiError } from "@/lib/api/client";
 import { generateId, titleFromPrompt } from "@/lib/utils";
 import type {
@@ -78,6 +78,7 @@ interface CitationData {
 
 interface GroundednessCompletedData {
   status?: string;
+  error_code?: string | null;
   score?: number;
   action?: string;
 }
@@ -438,7 +439,7 @@ function ChatContent() {
               "VERIFYING",
               "Verifying claim-level groundedness",
               data.status
-                ? `${data.status.toLowerCase().replaceAll("_", " ")}${data.score !== undefined ? ` · ${data.score.toFixed(2)}` : ""}`
+                ? `${data.status.toLowerCase().replaceAll("_", " ")}${data.score !== undefined ? ` · ${data.score.toFixed(2)}` : ""}${data.error_code ? ` · ${data.error_code}` : ""}`
                 : undefined,
               {
                 groundednessStatus: data.status,

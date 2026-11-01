@@ -178,6 +178,7 @@ class GroundednessEvaluationResponse(APIModel):
     question: str
     answer: str
     status: str
+    error_code: str | None = None
     score: float | None
     threshold: float
     total_claims: int

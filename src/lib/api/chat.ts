@@ -28,6 +28,7 @@ export interface ApiChatMessageMetadata {
   validation_status?: string | null;
   query_rewritten?: boolean | null;
   groundedness_status?: string | null;
+  groundedness_error_code?: string | null;
   groundedness_score?: number | null;
   evidence_coverage_status?: string | null;
   evidence_coverage_score?: number | null;
@@ -78,6 +79,7 @@ export interface ApiAgentMetadata {
   retry_count: number;
   generation_model: string | null;
   groundedness_status?: string | null;
+  groundedness_error_code?: string | null;
   groundedness_score?: number | null;
   groundedness_claim_count?: number;
   groundedness_unsupported_claims?: number;
@@ -155,6 +157,8 @@ export function mapChatMessage(message: ApiChatMessage): ChatMessage {
     processingMs: message.metadata.latency_ms ?? undefined,
     evidenceStatus: message.metadata.evidence_status ?? undefined,
     validationStatus: message.metadata.validation_status ?? undefined,
+    groundednessStatus: message.metadata.groundedness_status ?? undefined,
+    groundednessErrorCode: message.metadata.groundedness_error_code ?? undefined,
     queryRewritten: message.metadata.query_rewritten ?? undefined,
     isDemo: false,
   };
@@ -219,6 +223,7 @@ export function mapAgent(agent: ApiAgentMetadata): AgentMeta {
     retryCount: agent.retry_count,
     generationModel: agent.generation_model,
     groundednessStatus: agent.groundedness_status ?? undefined,
+    groundednessErrorCode: agent.groundedness_error_code ?? undefined,
     groundednessScore: agent.groundedness_score ?? undefined,
     groundednessClaimCount: agent.groundedness_claim_count,
     groundednessUnsupportedClaims: agent.groundedness_unsupported_claims,

@@ -57,7 +57,9 @@ export function MessageBubble({
   const [copied, setCopied] = useState(false);
   const isAssistant = message.role === "assistant";
   const evidenceStatus = message.evidenceStatus ?? message.agent?.evidenceStatus;
-  const groundednessStatus = message.agent?.groundednessStatus;
+  const groundednessStatus = message.groundednessStatus ?? message.agent?.groundednessStatus;
+  const groundednessErrorCode =
+    message.groundednessErrorCode ?? message.agent?.groundednessErrorCode;
   const groundednessFailed = groundednessStatus === "NOT_GROUNDED" || groundednessStatus === "FAILED";
 
   const copyAnswer = async () => {
@@ -217,6 +219,12 @@ export function MessageBubble({
                             <ShieldCheck className="size-2.5 text-success/80" />
                             {message.agent.groundednessScore.toFixed(2)} grounded
                           </span>
+                        </>
+                      ) : null}
+                      {groundednessFailed && groundednessErrorCode ? (
+                        <>
+                          <span className="size-0.5 rounded-full bg-white/15" />
+                          <span>verification error: {groundednessErrorCode}</span>
                         </>
                       ) : null}
                       {message.agent?.evidenceCoverageScore !== undefined ? (
