@@ -326,8 +326,14 @@ class DocumentIndexingService:
         )
         if not self.configured:
             model_status = IntegrationStatus.NOT_CONFIGURED
-        elif index_snapshot.status == VectorIndexState.DEGRADED:
+        elif index_snapshot.status in {
+            VectorIndexState.DEGRADED,
+            VectorIndexState.FAILED,
+            VectorIndexState.UNAVAILABLE,
+        }:
             model_status = IntegrationStatus.DEGRADED
+        elif index_snapshot.vector_count <= 0 or index_snapshot.indexed_documents <= 0:
+            model_status = IntegrationStatus.AWAITING_INTEGRATION
         else:
             model_status = IntegrationStatus.OPERATIONAL
 

@@ -7,7 +7,8 @@ export type IntegrationStatus =
   | "UNAVAILABLE"
   | "NOT_CONFIGURED"
   | "AWAITING_INTEGRATION"
-  | "NOT_IMPLEMENTED";
+  | "NOT_IMPLEMENTED"
+  | "UNKNOWN";
 
 export interface ComponentHealth {
   name: string;

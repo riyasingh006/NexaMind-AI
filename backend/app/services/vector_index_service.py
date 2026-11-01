@@ -619,15 +619,20 @@ class VectorIndexService:
             for item in loaded.metadata.get("vectors", [])
             if isinstance(item, dict)
         }
+        status = loaded.state
+        detail = loaded.detail
+        if status == VectorIndexState.READY and loaded.vector_count == 0:
+            status = VectorIndexState.INITIALIZING
+            detail = "The FAISS index is empty; index a document before retrieval."
         return IndexSnapshot(
-            status=loaded.state,
+            status=status,
             vector_count=loaded.vector_count,
             indexed_documents=len(document_ids),
             version=loaded.manifest.get("version"),
             created_at=self._parse_datetime(loaded.manifest.get("created_at")),
             updated_at=self._parse_datetime(loaded.manifest.get("updated_at")),
             recovered=loaded.recovered,
-            detail=loaded.detail,
+            detail=detail,
         )
 
     def _record_metadata(self, record: VectorRecord) -> dict[str, Any]:

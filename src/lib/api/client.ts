@@ -67,10 +67,13 @@ export async function apiRequest<T>(
       cache: "no-store",
     });
   } catch {
-    throw new ApiError("Unable to reach the DocuMind API", {
-      status: 0,
-      code: "NETWORK_ERROR",
-    });
+    throw new ApiError(
+      "Could not reach the backend. Check NEXT_PUBLIC_API_BASE_URL and the backend CORS origin list.",
+      {
+        status: 0,
+        code: "NETWORK_ERROR",
+      },
+    );
   }
 
   if (!response.ok) {

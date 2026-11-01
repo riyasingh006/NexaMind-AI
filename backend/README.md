@@ -1,8 +1,8 @@
 # DocuMind AI Backend
 
-Phase 6 backend for the DocuMind AI document intelligence workspace. The service validates, parses, normalizes, chunks, embeds, indexes, and retrieves real PDF, TXT, and Markdown content through a typed FastAPI API. Gemini `gemini-embedding-001` vectors are persisted in a local FAISS index, and a LangGraph agent generates citation-validated answers with hybrid multi-query retrieval, Gemini reranking, evidence coverage, and claim-level groundedness verification.
+This backend powers the NexaMind AI document intelligence workspace. It validates, parses, normalizes, chunks, embeds, indexes, and retrieves PDF, TXT, and Markdown content through a typed FastAPI API. Gemini `gemini-embedding-001` vectors are stored in a local FAISS index; the LangGraph agent performs hybrid multi-query retrieval, Gemini reranking, evidence coverage, citation validation, and groundedness checks. Local FAISS files are not durable across Render deploys unless placed on a confirmed persistent disk.
 
-> **Implementation boundary:** Phase 6 implements real multi-query semantic plus BM25 retrieval, normalized weighted fusion, Reciprocal Rank Fusion (RRF), structured Gemini reranking with deterministic fallback, optional neighbor expansion, context optimization, evidence coverage, and bounded groundedness correction. `POST /api/v1/chat/stream` remains an integration-status placeholder and does not stream tokens. Retrieval analytics continue to report aggregate persisted query counts without per-query latency distributions.
+> **Implementation boundary:** The backend includes multi-query semantic plus BM25 retrieval, weighted fusion, Reciprocal Rank Fusion (RRF), structured Gemini reranking with deterministic fallback, optional neighbor expansion, context optimization, evidence coverage, groundedness correction, and the `/api/v1/chat/stream` SSE route. Live grounded answers still depend on successful Gemini generation and verification. Retrieval analytics report aggregate persisted query counts without per-query latency distributions.
 
 ## Stack
 
@@ -11,7 +11,7 @@ Phase 6 backend for the DocuMind AI document intelligence workspace. The service
 | Runtime | Python 3.11+ |
 | API | FastAPI, Uvicorn |
 | Validation | Pydantic v2, pydantic-settings |
-| Persistence | SQLAlchemy 2.0+ async ORM, SQLite via aiosqlite |
+| Persistence | SQLAlchemy 2.0+ async ORM; SQLite for local tests and PostgreSQL supported via asyncpg |
 | PDF parsing | PyMuPDF |
 | Markdown parsing | markdown-it-py |
 | Text decoding | charset-normalizer |
@@ -256,7 +256,13 @@ Connected document operations:
 - Load and delete persisted chat conversations from the backend
 - View live backend and component health
 
-Streaming remains a future integration. The chat UI waits for the complete `/chat/query` response rather than simulating tokens.
+The chat UI uses the real `/chat/stream` Server-Sent Events (SSE) endpoint. `/chat/query` remains available for non-streaming clients; both run the same grounded LangGraph workflow.
+
+## Render deployment
+
+For the existing Render services, set `NEXT_PUBLIC_API_BASE_URL=https://nexamind-backend-zvuc.onrender.com/api/v1` on the frontend service before its build. On the backend, set `FRONTEND_URL` to the exact deployed frontend origin, or set `CORS_ORIGINS` to a comma-separated list of allowed origins. `CORS_ORIGINS` overrides `FRONTEND_URL`; when empty, only `FRONTEND_URL` is allowed. Keep the existing Render `DATABASE_URL` and `DOCUMIND_GEMINI_API_KEY` secret.
+
+The default upload, extracted-text, and FAISS paths are inside the backend service directory. Render's local filesystem is not durable across deploys/restarts unless an existing persistent disk is mounted there. Only if a persistent disk is already configured, point `STORAGE_DIR`, `EXTRACTED_DIR`, `PROCESSING_TEMP_DIR`, and `FAISS_DIR` to paths on its mount. This repository does not declare or verify a Render disk, so durability must not be assumed.
 
 ## Environment Variables
 
@@ -271,7 +277,8 @@ Streaming remains a future integration. The chat UI waits for the complete `/cha
 | `DATABASE_ECHO` | `false` | SQL echo logging |
 | `DATABASE_POOL_SIZE` | `5` | Non-SQLite pool size |
 | `DATABASE_MAX_OVERFLOW` | `10` | Non-SQLite pool overflow |
-| `FRONTEND_URL` | `http://localhost:3000` | Allowed CORS origin |
+| `FRONTEND_URL` | `http://localhost:3000` | Fallback allowed CORS origin |
+| `CORS_ORIGINS` | empty | Optional comma-separated CORS origin list; overrides `FRONTEND_URL` |
 | `LOG_LEVEL` | `INFO` | Root log level |
 | `LOG_DIR` | `./logs` | Rotating log directory |
 | `STORAGE_DIR` | `./storage` | Uploaded source directory |
@@ -354,7 +361,7 @@ The chunk configuration is validated at startup: `MIN_CHUNK_SIZE <= CHUNK_SIZE <
 | POST | `/api/v1/retrieval/inspect` | Inspect hybrid query lanes, fused candidates, reranking, coverage, and final chunks |
 | POST | `/api/v1/evaluation/groundedness` | Verify answer claims against retrieved cited evidence |
 | POST | `/api/v1/chat/query` | Run the LangGraph agent and persist the grounded answer |
-| POST | `/api/v1/chat/stream` | Integration-status SSE placeholder; no tokens |
+| POST | `/api/v1/chat/stream` | Workflow and answer-token SSE events with groundedness status |
 | GET | `/api/v1/chat/conversations` | Conversation history |
 | GET | `/api/v1/chat/conversations/{id}` | Conversation detail |
 | DELETE | `/api/v1/chat/conversations/{id}` | Delete conversation and messages |
@@ -520,14 +527,15 @@ The suite uses temporary SQLite, storage, extracted, processing, and FAISS direc
 - Extension, MIME, signature, size, binary, empty, and truncated-file checks are enforced
 - Uploads are staged before atomic finalization; temporary files are cleaned up
 - SQL is generated through SQLAlchemy with bound parameters
-- CORS is restricted to `FRONTEND_URL`
+- CORS allows only `CORS_ORIGINS`, or `FRONTEND_URL` when the list is empty
 - Secrets, full prompts, and document bytes are not logged
-- Embedding vectors and FAISS files stay on the local backend; no browser-side inference
-- Authentication, authorization, malware scanning, tenant isolation, and OCR are not part of Phase 6
+- Uploaded files, extracted text, and FAISS files use local paths; durability requires a confirmed persistent mount
+- The `/chat/stream` SSE route is implemented and covered by backend tests; live groundedness still requires successful Gemini verification
+- Authentication, authorization, tenant isolation, malware scanning, and OCR are not implemented
 
-## Next Phase Roadmap
+## Remaining Production Work
 
-1. Implement true SSE token streaming while preserving hybrid retrieval and grounded citation validation.
-2. Persist retrieval metrics for score distributions, rerank movement, coverage, groundedness, and latency percentiles.
-3. Add production migrations, authentication, authorization, and background indexing jobs.
-4. Add evaluation datasets for groundedness, citation accuracy, abstention behavior, and regression scoring.
+1. Add authentication and authorization for document, retrieval, and conversation APIs.
+2. Verify durable storage paths against the existing Render service's actual mount; do not assume local files survive deploys.
+3. Resolve and validate live Gemini groundedness verification before claiming grounded-chat readiness.
+4. Add production database migrations and background indexing jobs.

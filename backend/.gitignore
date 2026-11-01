@@ -9,6 +9,10 @@ htmlcov/
 !.env.example
 data/*.db
 data/*.db-*
+data/extracted/*
+!data/extracted/.gitkeep
+data/tmp/*
+!data/tmp/.gitkeep
 storage/*
 !storage/.gitkeep
 logs/*

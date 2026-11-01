@@ -59,14 +59,15 @@ const statusStyles: Record<
   NOT_CONFIGURED: { dot: "bg-subtle", badge: "muted", label: "Not configured" },
   AWAITING_INTEGRATION: { dot: "bg-warning", badge: "warning", label: "Awaiting build" },
   NOT_IMPLEMENTED: { dot: "bg-subtle", badge: "muted", label: "Not implemented" },
+  UNKNOWN: { dot: "bg-subtle", badge: "muted", label: "Not measured" },
 };
 
-type ReadinessState = "ready" | "pending" | "blocked";
+type ReadinessState = "ready" | "pending" | "blocked" | "unknown";
 
 const stateStyles: Record<
   ReadinessState,
   {
-    badge: "success" | "warning" | "danger";
+    badge: "success" | "warning" | "danger" | "muted";
     icon: LucideIcon;
     label: string;
     text: string;
@@ -90,6 +91,12 @@ const stateStyles: Record<
     label: "Blocked",
     text: "text-[#ff9aaa]",
   },
+  unknown: {
+    badge: "muted",
+    icon: CircleDashed,
+    label: "Not measured",
+    text: "text-subtle",
+  },
 };
 
 interface ReadinessItem {
@@ -99,24 +106,50 @@ interface ReadinessItem {
   detail: string;
 }
 
-function componentStatus(
+function componentStatus(overview: SystemOverview | null, name: string): IntegrationStatus {
+  return overview?.components.find((component) => component.name === name)?.status ?? "UNKNOWN";
+}
+
+function readinessForStatus(status: IntegrationStatus): ReadinessState {
+  if (status === "OPERATIONAL") return "ready";
+  if (
+    status === "PROCESSING" ||
+    status === "AWAITING_INTEGRATION"
+  ) {
+    return "pending";
+  }
+  if (status === "UNKNOWN") return "unknown";
+  return "blocked";
+}
+
+function componentDetail(
   overview: SystemOverview | null,
   name: string,
-  fallback: IntegrationStatus,
-): IntegrationStatus {
-  return overview?.components.find((component) => component.name === name)?.status ?? fallback;
+  unavailableDetail: string,
+): string {
+  return overview?.components.find((component) => component.name === name)?.detail ?? unavailableDetail;
 }
 
 function buildReadiness(overview: SystemOverview | null): ReadinessItem[] {
-  const gemini = componentStatus(overview, "gemini", "UNAVAILABLE");
-  const embeddings = componentStatus(overview, "embeddings", "UNAVAILABLE");
-  const vectorIndex = componentStatus(overview, "vector_index", "UNAVAILABLE");
-  const pipeline = componentStatus(overview, "document_pipeline", "UNAVAILABLE");
-  const orchestration = componentStatus(overview, "orchestration", "UNAVAILABLE");
-  const pipelineReady = pipeline === "OPERATIONAL";
-  const geminiReady = gemini === "OPERATIONAL";
-  const embeddingsReady = embeddings === "OPERATIONAL";
-  const vectorReady = vectorIndex === "OPERATIONAL";
+  const api = componentStatus(overview, "api");
+  const database = componentStatus(overview, "database");
+  const gemini = componentStatus(overview, "gemini");
+  const embeddings = componentStatus(overview, "embeddings");
+  const vectorIndex = componentStatus(overview, "vector_index");
+  const pipeline = componentStatus(overview, "document_pipeline");
+  const orchestration = componentStatus(overview, "orchestration");
+  const chatDependencies = [api, database, pipeline, gemini, embeddings, vectorIndex, orchestration]
+    .map(readinessForStatus);
+  const chatState = chatDependencies.includes("unknown")
+    ? "unknown"
+    : chatDependencies.includes("blocked")
+      ? "blocked"
+      : chatDependencies.includes("pending")
+        ? "pending"
+        : "ready";
+  const healthUnavailable = overview
+    ? "Backend health did not report this component; its state cannot be verified."
+    : "Backend health was not received; this component cannot be verified.";
 
   return [
     {
@@ -128,54 +161,50 @@ function buildReadiness(overview: SystemOverview | null): ReadinessItem[] {
     {
       area: "FastAPI backend",
       phase: "Phase 2",
-      state: componentStatus(overview, "api", "UNAVAILABLE") === "OPERATIONAL" ? "ready" : "blocked",
-      detail: "Typed API, health, errors and request tracing.",
+      state: readinessForStatus(api),
+      detail: componentDetail(overview, "api", healthUnavailable),
     },
     {
       area: "Document ingestion pipeline",
       phase: "Phase 3",
-      state: pipelineReady ? "ready" : "blocked",
-      detail: "Uploads, parsing, normalization, chunking and persistence.",
+      state: readinessForStatus(pipeline),
+      detail: componentDetail(overview, "document_pipeline", healthUnavailable),
     },
     {
       area: "Gemini credentials",
       phase: "Phase 4",
-      state: geminiReady ? "ready" : "blocked",
-      detail: geminiReady
-        ? "DOCUMIND_GEMINI_API_KEY is configured."
-        : "DOCUMIND_GEMINI_API_KEY is not configured.",
+      state: readinessForStatus(gemini),
+      detail: componentDetail(overview, "gemini", healthUnavailable),
     },
     {
       area: "Embedding pipeline",
       phase: "Phase 4",
-      state: embeddingsReady ? "ready" : "blocked",
-      detail: "gemini-embedding-001 document and query embeddings.",
+      state: readinessForStatus(embeddings),
+      detail: componentDetail(overview, "embeddings", healthUnavailable),
     },
     {
       area: "FAISS vector index",
       phase: "Phase 4",
-      state: vectorReady ? "ready" : vectorIndex === "AWAITING_INTEGRATION" ? "pending" : "blocked",
-      detail: vectorReady
-        ? "Persistent vector index is built and searchable."
-        : "Build the vector index from processed documents.",
+      state: readinessForStatus(vectorIndex),
+      detail: componentDetail(overview, "vector_index", healthUnavailable),
     },
     {
       area: "LangGraph orchestration",
       phase: "Phase 5",
-      state: orchestration === "NOT_CONFIGURED" ? "blocked" : "ready",
-      detail: "Query analysis, rewriting, retrieval, citations and safe abstention. SSE streaming remains pending.",
+      state: readinessForStatus(orchestration),
+      detail: componentDetail(overview, "orchestration", healthUnavailable),
     },
     {
       area: "Grounded chat interface",
       phase: "Phase 5",
-      state: geminiReady && vectorReady ? "ready" : "pending",
-      detail: "Connected to /chat/query; requires Gemini credentials and indexed evidence.",
+      state: chatState,
+      detail: "Requires a reachable API, configured Gemini, and indexed evidence.",
     },
     {
       area: "Conversation persistence",
       phase: "Phase 5",
-      state: "ready",
-      detail: "Chat history and citations are persisted by the backend.",
+      state: readinessForStatus(database),
+      detail: componentDetail(overview, "database", healthUnavailable),
     },
   ];
 }

@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     debug: bool = False
     api_v1_prefix: str = "/api/v1"
     frontend_url: str = "http://localhost:3000"
+    cors_origins_raw: str = Field(default="", validation_alias="CORS_ORIGINS")
     log_level: str = "INFO"
     log_dir: Path = BACKEND_DIR / "logs"
     storage_dir: Path = BACKEND_DIR / "storage"
@@ -130,7 +131,14 @@ class Settings(BaseSettings):
 
     @property
     def cors_origins(self) -> list[str]:
-        return [self.frontend_url]
+        configured_origins = self.cors_origins_raw or self.frontend_url
+        return list(
+            dict.fromkeys(
+                origin.strip().rstrip("/")
+                for origin in configured_origins.split(",")
+                if origin.strip()
+            )
+        )
 
     @property
     def gemini_configured(self) -> bool:
