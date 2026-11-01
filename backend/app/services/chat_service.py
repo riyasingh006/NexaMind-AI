@@ -8,7 +8,6 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.agent_service import AgentService
-from app.agent.graph import AgentEventSink
 from app.agent.services.gemini_generation_service import (
     GenerationNotConfiguredError,
 )
@@ -140,7 +139,7 @@ class ChatService:
             role="assistant",
             content=result.answer,
             message_metadata=ChatMessageMetadata(
-                integration_status=IntegrationStatus.OPERATIONAL,
+                integration_status=self._integration_status(result),
                 model=result.generation_model,
                 sources_count=len(sources),
                 latency_ms=result.processing_time_ms,
@@ -150,6 +149,11 @@ class ChatService:
                 groundedness_status=(
                     str(result.groundedness.get("status"))
                     if result.groundedness
+                    else None
+                ),
+                groundedness_error_code=(
+                    str(result.groundedness.get("error"))
+                    if result.groundedness and result.groundedness.get("error")
                     else None
                 ),
                 groundedness_score=(
@@ -479,7 +483,7 @@ class ChatService:
             role="assistant",
             content=result.answer,
             message_metadata=ChatMessageMetadata(
-                integration_status=IntegrationStatus.OPERATIONAL,
+                integration_status=self._integration_status(result),
                 model=result.generation_model,
                 sources_count=len(sources),
                 latency_ms=result.processing_time_ms,
@@ -489,6 +493,11 @@ class ChatService:
                 groundedness_status=(
                     str(result.groundedness.get("status"))
                     if result.groundedness
+                    else None
+                ),
+                groundedness_error_code=(
+                    str(result.groundedness.get("error"))
+                    if result.groundedness and result.groundedness.get("error")
                     else None
                 ),
                 groundedness_score=(
@@ -825,7 +834,7 @@ class ChatService:
         ]
         retrieval_duration = float(metadata.get("retrieval_duration_ms", 0.0))
         return ChatQueryResponse(
-            status=IntegrationStatus.OPERATIONAL,
+            status=self._integration_status(result),
             conversation_id=conversation.id,
             user_message=ChatMessageResponse.model_validate(user_message),
             assistant_message=ChatMessageResponse.model_validate(
@@ -863,6 +872,11 @@ class ChatService:
                     if result.groundedness
                     else None
                 ),
+                groundedness_error_code=(
+                    str(result.groundedness.get("error"))
+                    if result.groundedness and result.groundedness.get("error")
+                    else None
+                ),
                 groundedness_score=(
                     result.groundedness.get("score")
                     if result.groundedness
@@ -895,7 +909,17 @@ class ChatService:
         )
 
     @staticmethod
+    def _integration_status(result: AgentRunResult) -> IntegrationStatus:
+        if result.groundedness and result.groundedness.get("status") == "FAILED":
+            return IntegrationStatus.DEGRADED
+        return IntegrationStatus.OPERATIONAL
+
+    @staticmethod
     def _response_detail(result: AgentRunResult) -> str:
+        if result.groundedness and result.groundedness.get("status") == "FAILED":
+            error_code = result.groundedness.get("error")
+            reason = f" ({error_code})" if error_code else ""
+            return f"Groundedness verification failed{reason}; the answer was withheld."
         if result.validation_status.value == "VALID":
             return "Grounded answer generated from indexed document evidence."
         if result.evidence_status == EvidenceStatus.RETRIEVAL_UNAVAILABLE:
@@ -913,10 +937,7 @@ class ChatService:
                 "The retrieved evidence was insufficient for a reliable "
                 "document-grounded answer."
             )
-        if result.groundedness and result.groundedness.get("status") in {
-            "NOT_GROUNDED",
-            "FAILED",
-        }:
+        if result.groundedness and result.groundedness.get("status") == "NOT_GROUNDED":
             return (
                 "The generated answer did not pass claim-level groundedness "
                 "verification, so it was withheld."

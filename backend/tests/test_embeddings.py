@@ -140,6 +140,17 @@ async def test_embedding_service_retries_retryable_errors(tmp_path):
     assert len(vectors) == 1
 
 
+def test_empty_vector_index_is_not_ready(tmp_path):
+    service = VectorIndexService(_settings(tmp_path))
+
+    snapshot = service.rebuild([])
+
+    assert snapshot.status.value == "INITIALIZING"
+    assert snapshot.vector_count == 0
+    assert snapshot.indexed_documents == 0
+    assert "empty" in snapshot.detail.lower()
+
+
 def test_vector_index_persists_filters_and_recovers_backup(tmp_path):
     settings = _settings(tmp_path)
     service = VectorIndexService(settings)
@@ -267,6 +278,15 @@ async def test_upload_auto_index_search_status_and_delete(client, monkeypatch):
     )
     assert empty_search.status_code == 200
     assert empty_search.json()["result_count"] == 0
+
+    index_status = await client.get("/api/v1/vectors/index/status")
+    assert index_status.status_code == 200
+    assert index_status.json()["status"] == "INITIALIZING"
+    assert index_status.json()["vector_count"] == 0
+
+    statistics = await client.get("/api/v1/vectors/statistics")
+    assert statistics.status_code == 200
+    assert statistics.json()["model_status"] == "AWAITING_INTEGRATION"
 
 
 @pytest.mark.asyncio

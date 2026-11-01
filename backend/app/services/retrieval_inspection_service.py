@@ -329,6 +329,7 @@ class RetrievalInspectionService:
             question=request.question,
             answer=request.answer,
             status=str(report.get("status", "FAILED")),
+            error_code=report.get("error"),
             score=report.get("score"),
             threshold=float(report.get("threshold", 0.0)),
             total_claims=int(report.get("total_claims", 0)),

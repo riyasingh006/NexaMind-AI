@@ -96,10 +96,13 @@ export async function* streamChat(
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") throw error;
     if (error instanceof Error && error.name === "AbortError") throw error;
-    throw new ApiError("Unable to reach the DocuMind API", {
-      status: 0,
-      code: "NETWORK_ERROR",
-    });
+    throw new ApiError(
+      "Could not reach the backend. Check NEXT_PUBLIC_API_BASE_URL and the backend CORS origin list.",
+      {
+        status: 0,
+        code: "NETWORK_ERROR",
+      },
+    );
   }
 
   payload.onOpen?.();

@@ -27,7 +27,12 @@ def _chunk(document_id: str) -> dict:
     }
 
 
-def _agent_result(document_id: str, answer: str) -> AgentRunResult:
+def _agent_result(
+    document_id: str,
+    answer: str,
+    *,
+    groundedness: dict | None = None,
+) -> AgentRunResult:
     chunk = _chunk(document_id)
     return AgentRunResult(
         answer=answer,
@@ -52,7 +57,12 @@ def _agent_result(document_id: str, answer: str) -> AgentRunResult:
         retrieved_chunks=[chunk],
         filtered_chunks=[chunk],
         context_token_count=42,
-        validation_status=ValidationStatus.VALID,
+        validation_status=(
+            ValidationStatus.ABSTAINED
+            if groundedness and groundedness.get("status") == "FAILED"
+            else ValidationStatus.VALID
+        ),
+        groundedness=groundedness,
         retry_count=0,
         processing_metadata={"retrieval_duration_ms": 12.5},
         generation_model="gemini-3.6-flash",
@@ -120,6 +130,57 @@ async def test_query_returns_persisted_grounded_answer(client, monkeypatch):
     assert conversation["messages"][1]["metadata"]["citations"][0]["id"] == (
         "S1"
     )
+
+
+async def test_groundedness_failure_is_reported_as_degraded_and_persisted(
+    client, monkeypatch
+):
+    _configure_gemini(monkeypatch)
+    document_id = str(uuid4())
+    groundedness = {
+        "status": "FAILED",
+        "score": 0.0,
+        "threshold": 0.75,
+        "total_claims": 1,
+        "supported_claims": 0,
+        "partial_claims": 0,
+        "unsupported_claims": 1,
+        "claims": [],
+        "issues": ["Answer groundedness could not be verified."],
+        "duration_ms": 1.0,
+        "error": "GEMINI_UNAVAILABLE",
+    }
+
+    async def fake_run(self, payload: AgentRunInput) -> AgentRunResult:
+        return _agent_result(
+            document_id,
+            "The answer was withheld because verification failed.",
+            groundedness=groundedness,
+        )
+
+    monkeypatch.setattr(AgentService, "run", fake_run)
+
+    response = await client.post(
+        "/api/v1/chat/query",
+        json={"prompt": "What is in the document?"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "DEGRADED"
+    assert body["agent"]["groundedness_error_code"] == "GEMINI_UNAVAILABLE"
+    assert body["assistant_message"]["metadata"]["integration_status"] == "DEGRADED"
+    assert body["detail"] == (
+        "Groundedness verification failed (GEMINI_UNAVAILABLE); the answer was withheld."
+    )
+
+    history = await client.get(
+        f"/api/v1/chat/conversations/{body['conversation_id']}"
+    )
+    assert history.status_code == 200
+    assistant = history.json()["messages"][1]
+    assert assistant["metadata"]["groundedness_error_code"] == "GEMINI_UNAVAILABLE"
+    assert assistant["metadata"]["integration_status"] == "DEGRADED"
 
 
 async def test_conversation_history_list_and_delete(client, monkeypatch):

@@ -11,6 +11,7 @@ from app.core.config import Settings, get_settings
 from app.schemas.common import IntegrationStatus, VectorIndexState
 from app.schemas.health import ComponentHealth, HealthResponse, ReadinessResponse
 from app.schemas.system import SystemHealthResponse
+from app.services.provider_health import get_generation_health
 from app.services.vector_index_service import IndexSnapshot, VectorIndexService
 from app.utils.datetime import utc_now
 
@@ -62,8 +63,7 @@ class SystemService:
             environment=self.settings.app_env,
             timestamp=utc_now(),
             next_phase=(
-                "Phase 6: SSE token streaming, retrieval analytics, and "
-                "production authentication and deployment."
+                "Production authentication, authorization, and durable storage verification."
             ),
             components=await self._components(
                 database_available, database_latency
@@ -84,17 +84,7 @@ class SystemService:
         self, database_available: bool, database_latency: float | None
     ) -> list[ComponentHealth]:
         gemini_configured = self.settings.gemini_configured
-        gemini_status = (
-            IntegrationStatus.OPERATIONAL
-            if gemini_configured
-            else IntegrationStatus.NOT_CONFIGURED
-        )
-        gemini_detail = (
-            "A Gemini API key is configured; connectivity is verified when "
-            "an embedding request runs."
-            if gemini_configured
-            else "DOCUMIND_GEMINI_API_KEY is not configured."
-        )
+        gemini_status, gemini_detail = self._gemini_component(gemini_configured)
         try:
             index_snapshot = await asyncio.to_thread(
                 VectorIndexService(self.settings).get_status
@@ -103,6 +93,10 @@ class SystemService:
             logger.exception("system.vector_index_check_failed")
             index_snapshot = None
         index_status, index_detail = self._vector_index_component(index_snapshot)
+        embeddings_status, embeddings_detail = self._embedding_component(
+            index_snapshot,
+            gemini_configured,
+        )
 
         return [
             ComponentHealth(
@@ -117,11 +111,7 @@ class SystemService:
                     if database_available
                     else IntegrationStatus.UNAVAILABLE
                 ),
-                detail=(
-                    "SQLAlchemy database connectivity check succeeded."
-                    if database_available
-                    else "SQLAlchemy database connectivity check failed."
-                ),
+                detail=self._database_detail(database_available),
                 latency_ms=database_latency,
             ),
             ComponentHealth(
@@ -131,14 +121,8 @@ class SystemService:
             ),
             ComponentHealth(
                 name="embeddings",
-                status=gemini_status,
-                detail=(
-                    f"Model {self.settings.gemini_embedding_model} is configured "
-                    f"at {self.settings.gemini_embedding_dimension} dimensions; "
-                    "requests report failures explicitly."
-                    if gemini_configured
-                    else "DOCUMIND_GEMINI_API_KEY is not configured."
-                ),
+                status=embeddings_status,
+                detail=embeddings_detail,
             ),
             ComponentHealth(
                 name="document_pipeline",
@@ -155,23 +139,122 @@ class SystemService:
             ),
             ComponentHealth(
                 name="orchestration",
-                status=(
-                    IntegrationStatus.OPERATIONAL
-                    if gemini_configured
-                    else IntegrationStatus.NOT_CONFIGURED
-                ),
-                detail=(
-                    "LangGraph query analysis, rewriting, evidence evaluation, "
-                    "grounded generation, citation validation, and safe abstention "
-                    "are available. SSE token streaming is not implemented."
-                    if gemini_configured
-                    else (
-                        "LangGraph orchestration is implemented but requires "
-                        "DOCUMIND_GEMINI_API_KEY for answer generation."
-                    )
+                status=gemini_status,
+                detail=self._orchestration_detail(
+                    gemini_configured,
+                    gemini_status,
+                    gemini_detail,
                 ),
             ),
         ]
+
+    def _gemini_component(
+        self, configured: bool
+    ) -> tuple[IntegrationStatus, str]:
+        if not configured:
+            return (
+                IntegrationStatus.NOT_CONFIGURED,
+                "DOCUMIND_GEMINI_API_KEY is not configured.",
+            )
+        runtime = get_generation_health()
+        if (
+            runtime.model == self.settings.gemini_generation_model
+            and runtime.status == "OPERATIONAL"
+        ):
+            return (
+                IntegrationStatus.OPERATIONAL,
+                f"Gemini text generation on {runtime.model} last succeeded in this worker.",
+            )
+        if (
+            runtime.model == self.settings.gemini_generation_model
+            and runtime.status == "DEGRADED"
+        ):
+            return (
+                IntegrationStatus.DEGRADED,
+                f"The latest Gemini generation request failed with {runtime.error_code}.",
+            )
+        return (
+            IntegrationStatus.AWAITING_INTEGRATION,
+            (
+                f"A Gemini API key is configured for {self.settings.gemini_generation_model}; "
+                "text generation has not yet succeeded in this worker."
+            ),
+        )
+
+    def _embedding_component(
+        self,
+        snapshot: IndexSnapshot | None,
+        configured: bool,
+    ) -> tuple[IntegrationStatus, str]:
+        if not configured:
+            return (
+                IntegrationStatus.NOT_CONFIGURED,
+                "DOCUMIND_GEMINI_API_KEY is not configured.",
+            )
+        if snapshot is None:
+            return (
+                IntegrationStatus.UNAVAILABLE,
+                "Embedding status could not be checked because FAISS is unavailable.",
+            )
+        if snapshot.status in {
+            VectorIndexState.DEGRADED,
+            VectorIndexState.FAILED,
+            VectorIndexState.UNAVAILABLE,
+        }:
+            return (
+                IntegrationStatus.DEGRADED,
+                f"Embedding/indexing is degraded: {snapshot.detail}",
+            )
+        if (
+            snapshot.status != VectorIndexState.READY
+            or snapshot.vector_count <= 0
+            or snapshot.indexed_documents <= 0
+        ):
+            return (
+                IntegrationStatus.AWAITING_INTEGRATION,
+                "The embedding model is configured; no successfully indexed vectors are available yet.",
+            )
+        return (
+            IntegrationStatus.OPERATIONAL,
+            (
+                f"{snapshot.vector_count} vectors from {snapshot.indexed_documents} documents "
+                f"are indexed with {self.settings.gemini_embedding_model} at "
+                f"{self.settings.gemini_embedding_dimension} dimensions."
+            ),
+        )
+
+    def _orchestration_detail(
+        self,
+        configured: bool,
+        status: IntegrationStatus,
+        gemini_detail: str,
+    ) -> str:
+        if not configured:
+            return (
+                "LangGraph orchestration is implemented but requires "
+                "DOCUMIND_GEMINI_API_KEY for answer generation."
+            )
+        if status == IntegrationStatus.OPERATIONAL:
+            return (
+                "LangGraph analysis, retrieval, grounded generation, citation "
+                "validation, safe abstention, and POST /chat/stream are implemented; "
+                "Gemini generation has succeeded in this worker."
+            )
+        return (
+            "LangGraph and POST /chat/stream are implemented, but grounded answers "
+            f"are not verified: {gemini_detail}"
+        )
+
+    def _database_detail(self, available: bool) -> str:
+        scheme = self.settings.database_url.partition(":")[0].lower()
+        dialect = scheme.split("+", maxsplit=1)[0]
+        name = {
+            "postgres": "PostgreSQL",
+            "postgresql": "PostgreSQL",
+            "sqlite": "SQLite",
+        }.get(dialect, "SQLAlchemy database")
+        state = "connectivity check succeeded" if available else "connectivity check failed"
+        return f"{name} {state}."
 
     def _vector_index_component(
         self, snapshot: IndexSnapshot | None
@@ -182,10 +265,19 @@ class SystemService:
                 "The vector index status could not be read.",
             )
         if snapshot.status == VectorIndexState.READY:
+            if snapshot.vector_count <= 0 or snapshot.indexed_documents <= 0:
+                return (
+                    IntegrationStatus.AWAITING_INTEGRATION
+                    if self.settings.gemini_configured
+                    else IntegrationStatus.NOT_CONFIGURED,
+                    "The FAISS index is empty; index at least one document before retrieval.",
+                )
             return (
                 IntegrationStatus.OPERATIONAL,
-                f"FAISS index is ready with {snapshot.vector_count} vectors across "
-                f"{snapshot.indexed_documents} documents.",
+                (
+                    f"FAISS index is ready with {snapshot.vector_count} vectors across "
+                    f"{snapshot.indexed_documents} documents."
+                ),
             )
         if snapshot.status == VectorIndexState.DEGRADED:
             return IntegrationStatus.DEGRADED, snapshot.detail
@@ -194,6 +286,6 @@ class SystemService:
                 IntegrationStatus.AWAITING_INTEGRATION
                 if self.settings.gemini_configured
                 else IntegrationStatus.NOT_CONFIGURED,
-                "No FAISS index has been persisted yet.",
+                snapshot.detail,
             )
         return IntegrationStatus.UNAVAILABLE, snapshot.detail

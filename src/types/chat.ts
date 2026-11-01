@@ -44,6 +44,7 @@ export interface AgentMeta {
   retryCount: number;
   generationModel: string | null;
   groundednessStatus?: string;
+  groundednessErrorCode?: string;
   groundednessScore?: number;
   groundednessClaimCount?: number;
   groundednessUnsupportedClaims?: number;
@@ -100,6 +101,8 @@ export interface ChatMessage {
   processingMs?: number;
   evidenceStatus?: string;
   validationStatus?: string;
+  groundednessStatus?: string;
+  groundednessErrorCode?: string;
   queryRewritten?: boolean;
   isDemo?: boolean;
   attachments?: ChatAttachment[];

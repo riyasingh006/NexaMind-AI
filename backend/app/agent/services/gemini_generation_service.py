@@ -12,6 +12,10 @@ from pydantic import BaseModel, ValidationError
 
 from app.core.config import Settings, get_settings
 from app.core.exceptions import AppError, ConfigurationError
+from app.services.provider_health import (
+    record_generation_failure,
+    record_generation_success,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +134,7 @@ class GeminiGenerationService:
                 )
                 parsed = self._parse_response(response, schema)
                 self._last_error = None
+                record_generation_success(self.model)
                 logger.info(
                     "agent.gemini_generation_completed",
                     extra={
@@ -145,10 +150,12 @@ class GeminiGenerationService:
             except GenerationError as exc:
                 self._last_error = exc.code
                 if not exc.retryable or attempt >= attempts - 1:
+                    record_generation_failure(self.model, exc.code)
                     raise
             except TimeoutError as exc:
                 self._last_error = "timeout"
                 if attempt >= attempts - 1:
+                    record_generation_failure(self.model, "GEMINI_TIMEOUT")
                     raise GenerationTimeoutError(
                         "Gemini answer generation timed out.",
                         details={"model": self.model},
@@ -156,6 +163,7 @@ class GeminiGenerationService:
             except ValidationError as exc:
                 self._last_error = "invalid_response"
                 if attempt >= attempts - 1:
+                    record_generation_failure(self.model, "GEMINI_RESPONSE_INVALID")
                     raise GenerationResponseError(
                         "Gemini returned a response that does not match the required schema.",
                         details={
@@ -167,7 +175,9 @@ class GeminiGenerationService:
                 retryable = self._is_retryable(exc)
                 self._last_error = self._safe_error_message(exc)
                 if attempt >= attempts - 1 or not retryable:
-                    raise self._map_exception(exc) from exc
+                    mapped_error = self._map_exception(exc)
+                    record_generation_failure(self.model, mapped_error.code)
+                    raise mapped_error from exc
 
             delay = 0.5 * (2**attempt)
             logger.info(
@@ -245,6 +255,7 @@ class GeminiGenerationService:
                     details={"model": self.model},
                 )
             self._last_error = None
+            record_generation_success(self.model)
             logger.info(
                 "agent.gemini_stream_completed",
                 extra={
@@ -257,15 +268,20 @@ class GeminiGenerationService:
             )
         except TimeoutError as exc:
             self._last_error = "timeout"
+            record_generation_failure(self.model, "GEMINI_TIMEOUT")
             raise GenerationTimeoutError(
                 "Gemini streaming answer generation timed out.",
                 details={"model": self.model},
             ) from exc
-        except GenerationError:
+        except GenerationError as exc:
+            self._last_error = exc.code
+            record_generation_failure(self.model, exc.code)
             raise
         except Exception as exc:
-            self._last_error = self._safe_error_message(exc)
-            raise self._map_exception(exc) from exc
+            mapped_error = self._map_exception(exc)
+            self._last_error = mapped_error.code
+            record_generation_failure(self.model, mapped_error.code)
+            raise mapped_error from exc
         finally:
             close = getattr(iterator, "aclose", None)
             if callable(close):

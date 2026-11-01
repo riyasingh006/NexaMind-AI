@@ -22,26 +22,27 @@ const statusMeta = {
   NOT_CONFIGURED: { label: "Not configured", tone: "muted" },
   AWAITING_INTEGRATION: { label: "Awaiting build", tone: "warning" },
   NOT_IMPLEMENTED: { label: "Not implemented", tone: "muted" },
+  UNKNOWN: { label: "Not measured", tone: "muted" },
 } as const;
 
 const baseServices = [
   { name: "Frontend", detail: "Next.js UI", icon: Cpu, component: null, fallback: "OPERATIONAL" },
-  { name: "Backend", detail: "FastAPI", icon: Server, component: "api", fallback: "UNAVAILABLE" },
-  { name: "Database", detail: "SQLAlchemy", icon: Database, component: "database", fallback: "UNAVAILABLE" },
-  { name: "Gemini API", detail: "Credentials", icon: Sparkles, component: "gemini", fallback: "UNAVAILABLE" },
+  { name: "Backend", detail: "FastAPI", icon: Server, component: "api", fallback: "UNKNOWN" },
+  { name: "Database", detail: "SQLAlchemy", icon: Database, component: "database", fallback: "UNKNOWN" },
+  { name: "Gemini API", detail: "Credentials", icon: Sparkles, component: "gemini", fallback: "UNKNOWN" },
   {
     name: "Embeddings",
     detail: "gemini-embedding-001",
     icon: Braces,
     component: "embeddings",
-    fallback: "UNAVAILABLE",
+    fallback: "UNKNOWN",
   },
   {
     name: "Vector Index",
     detail: "Persistent FAISS",
     icon: Database,
     component: "vector_index",
-    fallback: "UNAVAILABLE",
+    fallback: "UNKNOWN",
   },
 ] as const;
 
@@ -86,9 +87,17 @@ export function SystemStatus() {
         {baseServices.map((service) => {
           const Icon = service.icon;
           const component = overview?.components.find((item) => item.name === service.component);
-          const status = component?.status ?? service.fallback;
+          const status = component?.status ?? (loading ? "PROCESSING" : service.fallback);
           const meta = statusMeta[status];
           const tone = toneMap[meta.tone];
+          const note = component?.detail ??
+            (loading
+              ? "Waiting for the backend health response."
+              : overview
+                ? "This component was not reported by the backend."
+                : service.name === "Frontend"
+                  ? service.detail
+                  : "Backend status was not received; check the production API URL and CORS configuration.");
           return (
             <div key={service.name} className="flex items-center gap-3 px-4 py-2.5">
               <Icon className="size-3.5 shrink-0 text-subtle" />
@@ -97,7 +106,7 @@ export function SystemStatus() {
                   {service.name}
                 </span>
                 <span className="block truncate text-[9px] text-subtle">
-                  {component?.detail ?? service.detail}
+                  {note}
                 </span>
               </span>
               <span className={cn("flex items-center gap-1.5 text-[9.5px] font-medium", tone.text)}>

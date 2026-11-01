@@ -26,7 +26,9 @@ async def test_system_status_exposes_integration_boundaries(client):
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "operational"
-    assert body["next_phase"].startswith("Phase 6")
+    assert body["next_phase"] == (
+        "Production authentication, authorization, and durable storage verification."
+    )
     components = {item["name"]: item for item in body["components"]}
     assert components["document_pipeline"]["status"] == "OPERATIONAL"
     assert components["embeddings"]["status"] == "NOT_CONFIGURED"
@@ -53,6 +55,113 @@ async def test_request_id_and_cors_are_applied(client):
     assert preflight.headers["access-control-allow-origin"] == (
         "http://localhost:3000"
     )
+
+
+def test_cors_origins_accept_comma_separated_production_origins():
+    from app.core.config import Settings
+
+    settings = Settings(
+        _env_file=None,
+        FRONTEND_URL="http://localhost:3000",
+        CORS_ORIGINS=(
+            "https://nexamind-web.onrender.com, https://app.example.com/"
+        ),
+    )
+
+    assert settings.cors_origins == [
+        "https://nexamind-web.onrender.com",
+        "https://app.example.com",
+    ]
+
+
+async def test_cors_allows_configured_frontend_origins(monkeypatch):
+    from httpx import ASGITransport, AsyncClient
+
+    from app.core.config import Settings
+    from app.main import create_app
+
+    settings = Settings(
+        _env_file=None,
+        cors_origins_raw=(
+            "https://nexamind-web.onrender.com,https://app.example.com"
+        ),
+    )
+    monkeypatch.setattr("app.main.settings", settings)
+    application = create_app()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=application),
+        base_url="http://testserver",
+    ) as test_client:
+        for origin in settings.cors_origins:
+            response = await test_client.options(
+                "/api/v1/health",
+                headers={
+                    "Origin": origin,
+                    "Access-Control-Request-Method": "GET",
+                },
+            )
+            assert response.status_code == 200
+            assert response.headers["access-control-allow-origin"] == origin
+
+
+def test_gemini_generation_is_not_ready_until_verified():
+    from pydantic import SecretStr
+
+    from app.core.config import Settings
+    from app.schemas.common import IntegrationStatus
+    from app.services.provider_health import (
+        record_generation_failure,
+        record_generation_success,
+        reset_generation_health,
+    )
+    from app.services.system_service import SystemService
+
+    settings = Settings(
+        _env_file=None,
+        documind_gemini_api_key=SecretStr("test-key"),
+    )
+    service = SystemService(settings)
+    reset_generation_health()
+    try:
+        assert (
+            service._gemini_component(True)[0]
+            == IntegrationStatus.AWAITING_INTEGRATION
+        )
+
+        record_generation_failure("gemini-3.6-flash", "GEMINI_UNAVAILABLE")
+        status, detail = service._gemini_component(True)
+        assert status == IntegrationStatus.DEGRADED
+        assert "GEMINI_UNAVAILABLE" in detail
+
+        record_generation_success("gemini-3.6-flash")
+        assert (
+            service._gemini_component(True)[0]
+            == IntegrationStatus.OPERATIONAL
+        )
+    finally:
+        reset_generation_health()
+
+
+def test_empty_faiss_index_is_awaiting_integration(tmp_path):
+    from pydantic import SecretStr
+
+    from app.core.config import Settings
+    from app.schemas.common import IntegrationStatus
+    from app.services.system_service import SystemService
+    from app.services.vector_index_service import VectorIndexService
+
+    settings = Settings(
+        _env_file=None,
+        documind_gemini_api_key=SecretStr("test-key"),
+        faiss_dir=tmp_path / "faiss",
+    )
+    snapshot = VectorIndexService(settings).rebuild([])
+
+    status, detail = SystemService(settings)._vector_index_component(snapshot)
+
+    assert status == IntegrationStatus.AWAITING_INTEGRATION
+    assert "empty" in detail.lower()
 
 
 async def test_openapi_contains_all_required_routes(client):

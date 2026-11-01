@@ -32,6 +32,7 @@ class ChatMessageMetadata(APIModel):
     validation_status: str | None = None
     query_rewritten: bool | None = None
     groundedness_status: str | None = None
+    groundedness_error_code: str | None = None
     groundedness_score: float | None = None
     evidence_coverage_status: str | None = None
     evidence_coverage_score: float | None = None
@@ -82,6 +83,7 @@ class AgentWorkflowMetadata(APIModel):
     retry_count: int = 0
     generation_model: str | None = None
     groundedness_status: str | None = None
+    groundedness_error_code: str | None = None
     groundedness_score: float | None = None
     groundedness_claim_count: int = 0
     groundedness_unsupported_claims: int = 0

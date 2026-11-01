@@ -307,6 +307,7 @@ def build_agent_graph(
             "groundedness_completed",
             {
                 "status": report.get("status"),
+                "error_code": report.get("error"),
                 "score": report.get("score"),
                 "threshold": report.get("threshold"),
                 "total_claims": report.get("total_claims", 0),
